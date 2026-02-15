@@ -30,3 +30,6 @@ desktop.ini
 
 # Pygame
 *.pyc
+
+# Project specific - exclude reference code
+example.py
