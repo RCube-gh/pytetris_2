@@ -51,6 +51,12 @@ class TetrisGame:
         self.last_move_rotate = False # For T-Spin detection
         self.is_tspin = 0 # 0=None, 1=Mini, 2=Normal
         self.show_b2b = False # Display flag for Back-to-Back
+        
+        # Attack System
+        self.garbage_queue = 0  # Pending garbage lines to receive (count)
+        self.last_attack = 0    # Last attack sent (for display)
+        self.ren_chain = 0      # Current REN (Combo) count
+        self.last_clear_y = 10  # Y-coordinate of last clear (for effects)
 
         self._fill_bag()
         self._spawn_piece()
@@ -61,6 +67,9 @@ class TetrisGame:
         self.bag.extend(new_bag)
 
     def _spawn_piece(self):
+        # Process pending garbage before spawning
+        self._process_garbage()
+        
         if len(self.bag) < 7:
             self._fill_bag()
         
@@ -192,6 +201,9 @@ class TetrisGame:
             self.in_clear_anim = True
             self.clear_timer = 0
             
+            # Store Y for effects (average of cleared lines)
+            self.last_clear_y = sum(lines_to_clear) / len(lines_to_clear) if lines_to_clear else 10
+            
             # Check for Perfect Clear
             self.is_perfect_clear = True
             for r in range(TOTAL_HEIGHT):
@@ -207,26 +219,66 @@ class TetrisGame:
             # Determine if this is a "difficult" clear (Tetris or T-Spin)
             is_difficult = (count == 4) or self.is_tspin
             
-            # Base Scores
-            if self.is_tspin:
-                # T-Spin Scoring
-                tspin_scores = {1: 800, 2: 1200, 3: 1600}
-                score_add = tspin_scores.get(count, 0) * (self.combo + 1)
-            else:
-                # Standard Scoring
-                base_scores = {1: 100, 2: 300, 3: 500, 4: 800} 
-                score_add = base_scores.get(count, 0) * (self.combo + 1)
+            # --- Attack Power Calculation ---
+            attacks = 0
             
-            # Back-to-Back Bonus (only if ALREADY in B2B state)
+            # 1. Base Attacks (Lines & T-Spins)
+            if self.is_tspin:
+                if self.is_tspin == 1: # T-Spin Mini
+                     if count == 1: attacks += 0 # TSM
+                     elif count == 2: attacks += 1 # TSM Double (Rare but possible)
+                else: # Normal T-Spin
+                     if count == 1: attacks += 2 # TSS
+                     elif count == 2: attacks += 4 # TSD
+                     elif count == 3: attacks += 6 # TST
+            else:
+                if count == 2: attacks += 1
+                elif count == 3: attacks += 2
+                elif count == 4: attacks += 4 # Tetris
+            
+            # 2. Back-to-Back Bonus
             b2b_active = False
             if is_difficult and self.back_to_back:
-                score_add = int(score_add * 1.5) # B2B multiplier
+                attacks += 1
                 b2b_active = True
             
-            # Perfect Clear Bonus
+            # 3. Perfect Clear Bonus
             if self.is_perfect_clear:
-                score_add += 3000
-                
+                attacks += 10
+            
+            # 4. REN (Combo) Bonus
+            # Ren table: 0,1->0, 2,3->1, 4,5->2, 6,7->3, 8,9,10->4, 11+->5
+            ren = max(0, self.combo) # combo starts at -1, first clear is 0 (no ren)
+            ren_bonus = 0
+            if ren >= 1: # 1REN = 2nd consecutive clear
+                 if ren < 2: ren_bonus = 0
+                 elif ren < 4: ren_bonus = 1
+                 elif ren < 6: ren_bonus = 2
+                 elif ren < 8: ren_bonus = 3
+                 elif ren < 11: ren_bonus = 4
+                 else: ren_bonus = 5
+            attacks += ren_bonus
+            
+            if attacks > 0:
+                print(f"DEBUG: Attack Calc: {attacks}")
+            self.last_attack = attacks
+            
+            # --- Scoring (Simplified based on Attack) ---
+            # Just use attack power for score multiplier to keep it simple, or keep old logic
+            # Keeping the old logic for Score, but added Attack logic above
+            
+            # Base Scores
+            if self.is_tspin:
+                tspin_scores = {1: 800, 2: 1200, 3: 1600}
+                base = tspin_scores.get(count, 0)
+            else:
+                base_scores = {1: 100, 2: 300, 3: 500, 4: 800} 
+                base = base_scores.get(count, 0)
+            
+            score_add = base * (self.combo + 1)
+            if b2b_active: score_add = int(score_add * 1.5)
+            if self.is_perfect_clear: score_add += 3000
+            
             self.score += score_add
             
             # Update Back-to-Back state for NEXT clear
@@ -318,6 +370,157 @@ class TetrisGame:
             return 2 # T-Spin Normal
         return 0
 
+    def _process_garbage(self):
+        """Processes pending garbage and adds it to the bottom of the grid."""
+        if self.garbage_queue <= 0:
+            return
+
+        # Cap garbage per spawn logic...
+        count = self.garbage_queue
+        
+        # Initial hole position
+        hole_x = random.randint(0, GRID_WIDTH - 1)
+        
+        # Shift grid up
+        for _ in range(count):
+            # Check game over if top row has blocks
+            if any(self.grid[0]):
+                self.game_over = True
+                # Visual effect continues
+            
+            # Remove top row
+            self.grid.pop(0)
+            
+            # Add garbage row at bottom
+            new_row = [8 for _ in range(GRID_WIDTH)] # 8 = Gray
+            new_row[hole_x] = 0 # Hole
+            self.grid.append(new_row)
+            
+            # Puyo Tetris Logic:
+            # 70% chance to keep same hole, 30% chance to change
+            if random.random() < 0.3:
+                hole_x = random.randint(0, GRID_WIDTH - 1)
+            
+        self.garbage_queue = 0 # All processed
+
+
+# --- EFFECT PARTICLES ---
+# --- EFFECT PARTICLES ---
+class AttackParticle:
+    def __init__(self, start_x, start_y, target_x, target_y, value, color):
+        # print(f"DEBUG: Particle Spawned! Val={value}") # Remove debug print to reduce noise
+        self.start_x = start_x
+        self.start_y = start_y
+        self.target_x = target_x
+        self.target_y = target_y
+        self.value = value
+        self.color = color
+        
+        self.arrived = False
+        self.t = 0.0
+        self.duration = 0.6 # seconds to reach target (fixed duration feels better for arc)
+        
+        # Bezier Control Point (Arching upwards)
+        # Midpoint + Offset Up
+        mid_x = (start_x + target_x) / 2
+        mid_y = (start_y + target_y) / 2 - 200 # Arch 200px upwards!
+        self.control_x = mid_x
+        self.control_y = mid_y
+        
+        # Current pos
+        self.x = start_x
+        self.y = start_y
+        
+        # Trail history [(x, y, size), ...]
+        self.trail = []
+        
+    def update(self, dt):
+        self.t += (dt / 1000) / self.duration
+        
+        if self.t >= 1.0:
+            self.t = 1.0
+            self.arrived = True
+        
+        # Quadratic Bezier Formula
+        # B(t) = (1-t)^2 * P0 + 2(1-t)t * P1 + t^2 * P2
+        u = 1 - self.t
+        tt = self.t * self.t
+        uu = u * u
+        tu = 2 * u * self.t
+        
+        self.x = uu * self.start_x + tu * self.control_x + tt * self.target_x
+        self.y = uu * self.start_y + tu * self.control_y + tt * self.target_y
+        
+        # Add to trail
+        self.trail.append((self.x, self.y))
+        if len(self.trail) > 10: # Keep last 10 points
+            self.trail.pop(0)
+
+    def draw(self, screen):
+        # Draw Trail
+        # Fade out size and alpha
+        base_size = 30 if self.value >= 5 else 20 # Massive size!
+        
+        for i, (tx, ty) in enumerate(self.trail):
+            progress = i / len(self.trail) # 0.0 to 1.0
+            size = base_size * progress
+            alpha = int(255 * progress)
+            
+            # Create a surface for alpha blending
+            s = pygame.Surface((int(size*2), int(size*2)), pygame.SRCALPHA)
+            pygame.draw.circle(s, (*self.color, alpha), (int(size), int(size)), int(size))
+            screen.blit(s, (int(tx - size), int(ty - size)))
+            
+        # Draw Head (Main Orb)
+        # Glow (Outer)
+        glow_size = base_size + 8
+        s_glow = pygame.Surface((glow_size*2, glow_size*2), pygame.SRCALPHA)
+        pygame.draw.circle(s_glow, (*self.color, 100), (glow_size, glow_size), glow_size)
+        screen.blit(s_glow, (int(self.x - glow_size), int(self.y - glow_size)))
+        
+        # Core (Inner, White-ish)
+        pygame.draw.circle(screen, (255, 255, 255), (int(self.x), int(self.y)), base_size - 2)
+
+
+class EffectParticle:
+    """Small particles for sparks, explosions, etc."""
+    def __init__(self, x, y, color, speed, duration, size):
+        self.x = x
+        self.y = y
+        self.color = color
+        angle = random.uniform(0, math.pi * 2)
+        self.vx = math.cos(angle) * speed
+        self.vy = math.sin(angle) * speed
+        self.duration = duration
+        self.t = 0
+        self.size = size
+        self.alive = True
+        
+    def update(self, dt):
+        self.t += dt / 1000
+        if self.t >= self.duration:
+            self.alive = False
+            return
+            
+        # Move
+        self.x += self.vx * (dt / 1000)
+        self.y += self.vy * (dt / 1000)
+        
+        # Gravity? Or friction?
+        self.vy += 500 * (dt / 1000) # Gravity
+        
+    def draw(self, screen):
+        if not self.alive: return
+        progress = self.t / self.duration
+        alpha = int(255 * (1 - progress))
+        size = int(self.size * (1 - progress))
+        if size < 1: size = 1
+        
+        s = pygame.Surface((size*2, size*2), pygame.SRCALPHA)
+        pygame.draw.circle(s, (*self.color, alpha), (size, size), size)
+        screen.blit(s, (int(self.x - size), int(self.y - size)))
+
+
 # --- PYGAME RENDERER ---
 def draw_block(screen, x, y, color):
     """Draws a single block with a glossy, jewel-like effect."""
@@ -406,6 +609,39 @@ def draw_grid(screen, game, das_val, arr_val, offset_x=0):
     # Right Side: NEXT
     next_x = board_x + board_w + 10
     
+    # --- Garbage Gauge (Above Board) ---
+    if game.garbage_queue > 0:
+        garbage_y = board_y - 25 # Draw above board
+        start_x = board_x # Align with board left
+        
+        # Calculate icons
+        # Large (5 lines), Small (1 line)
+        # Usually in Puyo Tetris: Small(1), Large(6), Rock(30), Star(180), Crown(360) etc.
+        # User requested: Small=1, Large=5
+        
+        amt = game.garbage_queue
+        num_large = amt // 5
+        num_small = amt % 5
+        
+        # Draw icons
+        # Large: Yellow Circle
+        # Small: Red Circle
+        icon_gap = 20
+        current_x = start_x
+        
+        # Draw Large first? Or Small first? Usually large value on left?
+        # Let's draw Large(Yellow) then Small(Red)
+        
+        for _ in range(num_large):
+            pygame.draw.circle(screen, (255, 255, 0), (current_x + 10, garbage_y), 10) # Yellow Large
+            pygame.draw.circle(screen, (200, 200, 0), (current_x + 10, garbage_y), 10, 2) # Outline
+            current_x += 25
+            
+        for _ in range(num_small):
+            pygame.draw.circle(screen, (255, 0, 0), (current_x + 6, garbage_y), 6) # Red Small
+            pygame.draw.circle(screen, (200, 0, 0), (current_x + 6, garbage_y), 6, 2) # Outline
+            current_x += 15
+
     # Draw Board Background/Border
     pygame.draw.rect(screen, (0, 0, 0), (board_x, board_y, board_w, GRID_HEIGHT * BLOCK_SIZE))
     pygame.draw.rect(screen, (255, 255, 255), (board_x - 4, board_y - 4, board_w + 8, GRID_HEIGHT * BLOCK_SIZE + 8), 3)
@@ -718,6 +954,9 @@ def main():
     # Dual Player Setup
     game1 = TetrisGame()  # Player 1 (Left)
     game2 = TetrisGame()  # Player 2 (Right)
+    
+    particles = [] # List of AttackParticle objects
+    effects = []   # List of EffectParticle objects
 
     running = True
     paused = False # New state
@@ -766,6 +1005,71 @@ def main():
                 fall_time1 += dt
             if not game2.in_clear_anim:
                 fall_time2 += dt
+
+            # --- Attack Handling ---
+            # P1 -> P2
+            if game1.last_attack > 0:
+                print(f"DEBUG: Handling P1 Attack: {game1.last_attack}")
+                attack = game1.last_attack
+                # Counter P1's garbage first
+                if game1.garbage_queue > 0:
+                    offset = min(attack, game1.garbage_queue)
+                    game1.garbage_queue -= offset
+                    attack -= offset
+                
+                # Send remaining to P2
+                if attack > 0:
+                    if ANIM_SPEED > 0:
+                        # --- Animation ON ---
+                        # Spawn particle P1(Board center, Clear Y) -> P2(Gauge top: 900, 25)
+                        start_x = 300 
+                        start_y = int(50 + (game1.last_clear_y - BUFFER_HEIGHT) * BLOCK_SIZE)
+                        start_y = max(50, min(start_y, 650))
+                        
+                        p = AttackParticle(start_x, start_y, 900, 25, attack, (255, 255, 0))
+                        particles.append(p)
+                        
+                        # Spawn Explosion Effects
+                        for _ in range(30):
+                             ex = EffectParticle(start_x, start_y, (255, 255, 100), random.randint(100, 500), random.uniform(0.5, 1.0), random.randint(4, 12))
+                             effects.append(ex)
+                    else:
+                        # --- Animation OFF (Instant) ---
+                        game2.garbage_queue += attack
+                
+                game1.last_attack = 0 # Clear flag
+
+            # P2 -> P1
+            if game2.last_attack > 0:
+                # print(f"DEBUG: Handling P2 Attack: {game2.last_attack}")
+                attack = game2.last_attack
+                # Counter P2's garbage first
+                if game2.garbage_queue > 0:
+                    offset = min(attack, game2.garbage_queue)
+                    game2.garbage_queue -= offset
+                    attack -= offset
+                
+                # Send remaining to P1
+                if attack > 0:
+                    if ANIM_SPEED > 0:
+                        # --- Animation ON ---
+                        # Spawn particle P2(Board center, Clear Y) -> P1(Gauge top: 300, 25)
+                        start_x = 900 
+                        start_y = int(50 + (game2.last_clear_y - BUFFER_HEIGHT) * BLOCK_SIZE)
+                        start_y = max(50, min(start_y, 650))
+                        
+                        p = AttackParticle(start_x, start_y, 300, 25, attack, (255, 255, 0))
+                        particles.append(p)
+    
+                        # Spawn Explosion Effects
+                        for _ in range(30):
+                             ex = EffectParticle(start_x, start_y, (255, 255, 100), random.randint(100, 500), random.uniform(0.5, 1.0), random.randint(4, 12))
+                             effects.append(ex)
+                    else:
+                        # --- Animation OFF (Instant) ---
+                        game1.garbage_queue += attack
+                    
+                game2.last_attack = 0 # Clear flag
 
         # Input Handling
         for event in pygame.event.get():
@@ -907,6 +1211,31 @@ def main():
         virtual_screen.fill((30, 30, 40)) 
         draw_grid(virtual_screen, game1, DAS, ARR, offset_x=0)      # Player 1 (Left)
         draw_grid(virtual_screen, game2, DAS, ARR, offset_x=600)    # Player 2 (Right)
+        
+        # Update and Draw Particles
+        for p in particles[:]: # Iterate copy to allow removal
+            p.update(dt)
+            p.draw(virtual_screen)
+            if p.arrived:
+                # Add garbage to target
+                if p.target_x < 600: # Target is P1 (Left)
+                    game1.garbage_queue += p.value
+                else: # Target is P2 (Right)
+                    game2.garbage_queue += p.value
+                particles.remove(p)
+                
+                # Spawn Impact Effects (Impact Explosion)
+                # p.target_x, p.target_y is where it hit
+                for _ in range(20):
+                     ex = EffectParticle(p.target_x, p.target_y, (255, 100, 100), random.randint(100, 400), random.uniform(0.3, 0.8), random.randint(3, 10))
+                     effects.append(ex)
+        
+        # Update and Draw Effects
+        for e in effects[:]:
+            e.update(dt)
+            e.draw(virtual_screen)
+            if not e.alive:
+                effects.remove(e)
         
         if paused:
             draw_pause_menu(virtual_screen, sliders)
