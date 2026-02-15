@@ -1,5 +1,6 @@
 import random
 import copy
+# Version: 1.0 (SmartBot Base)
 # Avoid circular import from tetris_controller by defining actions locally
 # Actions (Mirrored)
 ACTION_NONE = 0
