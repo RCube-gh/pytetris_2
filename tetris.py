@@ -3,6 +3,7 @@ import random
 import math
 import sys
 from srs_data import *
+from tetris_controller import HumanController, AIController
 
 # --- CONFIG ---
 BLOCK_SIZE = 30
@@ -658,7 +659,10 @@ def draw_grid(screen, game, das_val, arr_val, offset_x=0):
                 
                 # Animation Effect: Sequential Flash (Left to Right)
                 if is_clearing:
-                    progress = game.clear_timer / game.clear_anim_duration
+                    if game.clear_anim_duration > 0:
+                        progress = game.clear_timer / game.clear_anim_duration
+                    else:
+                        progress = 1.0
                     
                     # Sequential timing parameters
                     col_delay = 0.05
@@ -759,7 +763,10 @@ def draw_grid(screen, game, das_val, arr_val, offset_x=0):
          fill_surf = font_tsp.render(msg, True, color_tsp)
          
          # Animation: Slide in from right
-         progress = game.clear_timer / game.clear_anim_duration
+         if game.clear_anim_duration > 0:
+             progress = game.clear_timer / game.clear_anim_duration
+         else:
+             progress = 1.0
          
          # Slide-in phase (0.0 -> 0.2): Move from right
          # Hold phase (0.2 -> 0.8): Stay in place
@@ -922,8 +929,8 @@ def draw_pause_menu(screen, sliders):
     overlay.fill((0, 0, 0, 200)) # Semi-transparent black
     screen.blit(overlay, (0, 0))
     
-    # Menu Box
-    menu_rect = pygame.Rect(50, 150, 400, 300)
+    # Menu Box (Expanded)
+    menu_rect = pygame.Rect(50, 100, 400, 450) # Taller to fit all sliders
     pygame.draw.rect(screen, (30, 30, 40), menu_rect)
     pygame.draw.rect(screen, (255, 255, 255), menu_rect, 2)
     
@@ -964,47 +971,92 @@ def main():
     fall_time2 = 0
     fall_speed = 800 
 
-    # Input Constants (Modern Tetris Standard-ish)
+    # Input Constant Defaults
     DAS = 100 
     ARR = 60 
     SDI = 50 
-    ANIM_SPEED = 500 # Line Clear Animation Duration (ms)
+    ANIM_SPEED = 500
+    AI_SPEED = 100 # Default AI delay in ms
     
-    # Sliders
-    das_slider = Slider(100, 250, 300, 10, 50, 300, DAS, "DAS (Delay)")
-    arr_slider = Slider(100, 320, 300, 10, 0, 100, ARR, "ARR (Speed)")
-    sdi_slider = Slider(100, 390, 300, 10, 0, 100, SDI, "SDI (Soft Drop)")
-    anim_slider = Slider(100, 460, 300, 10, 0, 1000, ANIM_SPEED, "Anim Speed (0=OFF)")
-    sliders = [das_slider, arr_slider, sdi_slider, anim_slider]
+    # Sliders (Adjusted positions for taller menu)
+    das_slider = Slider(100, 200, 300, 10, 50, 300, DAS, "DAS (Delay)")
+    arr_slider = Slider(100, 270, 300, 10, 0, 100, ARR, "ARR (Speed)")
+    sdi_slider = Slider(100, 340, 300, 10, 0, 100, SDI, "SDI (Soft Drop)")
+    anim_slider = Slider(100, 410, 300, 10, 0, 1000, ANIM_SPEED, "Anim Speed (0=OFF)")
+    ai_slider = Slider(100, 480, 300, 10, 0, 500, AI_SPEED, "AI Action Delay (ms)")
+    
+    sliders = [das_slider, arr_slider, sdi_slider, anim_slider, ai_slider]
 
-    # Input State Management - Player 1 (Arrow Keys)
-    key_states_p1 = {
-        pygame.K_LEFT:  {'pressed': False, 'das_timer': 0, 'arr_timer': 0},
-        pygame.K_RIGHT: {'pressed': False, 'das_timer': 0, 'arr_timer': 0},
-        pygame.K_DOWN:  {'pressed': False, 'das_timer': 0, 'arr_timer': 0}
+    # Input State Management - Player 1 (Arrow Keys) -> Now handled by Controller
+    key_map_p1 = {
+        'LEFT': pygame.K_LEFT, 'RIGHT': pygame.K_RIGHT, 'DOWN': pygame.K_DOWN,
+        'DROP': pygame.K_SPACE, 'ROT_R': pygame.K_UP, 'ROT_L': pygame.K_z,
+        'HOLD': pygame.K_LSHIFT, 'RESTART': pygame.K_r
     }
+    controller1 = HumanController(game1, key_map_p1, DAS, ARR, SDI)
     
-    # Input State Management - Player 2 (WASD)
-    key_states_p2 = {
-        pygame.K_a:  {'pressed': False, 'das_timer': 0, 'arr_timer': 0},
-        pygame.K_d: {'pressed': False, 'das_timer': 0, 'arr_timer': 0},
-        pygame.K_s:  {'pressed': False, 'das_timer': 0, 'arr_timer': 0}
-    }
+    # Input State Management - Player 2 (AI)
+    # key_map_p2 = {
+    #     'LEFT': pygame.K_a, 'RIGHT': pygame.K_d, 'DOWN': pygame.K_s,
+    #     'DROP': pygame.K_f, 'ROT_R': pygame.K_e, 'ROT_L': pygame.K_q,
+    #     'HOLD': pygame.K_TAB, 'RESTART': None 
+    # }
+    # controller2 = HumanController(game2, key_map_p2, DAS, ARR, SDI)
+    
+    # Enable Random AI for Player 2
+    controller2 = AIController(game2)
+
+    # Game States
+    STATE_WAITING = 0
+    STATE_PLAYING = 1
+    STATE_GAMEOVER = 2
+    app_state = STATE_WAITING
+    
+    winner_text = ""
+
+    # Mouse Scale Helper
+    def convert_mouse_pos(pos):
+        current_w, current_h = screen.get_size()
+        scale_w = current_w / VIRTUAL_W
+        scale_h = current_h / VIRTUAL_H
+        scale = min(scale_w, scale_h)
+        new_w = int(VIRTUAL_W * scale)
+        new_h = int(VIRTUAL_H * scale)
+        pad_x = (current_w - new_w) // 2
+        pad_y = (current_h - new_h) // 2
+        
+        mx, my = pos
+        # Remove padding
+        vx = (mx - pad_x) / scale
+        vy = (my - pad_y) / scale
+        return int(vx), int(vy)
 
     while running:
         dt = clock.tick(FPS)
         
-        # Update Game Logic (Animation) for both players
-        game1.clear_anim_duration = ANIM_SPEED
-        game1.update(dt)
-        game2.clear_anim_duration = ANIM_SPEED
-        game2.update(dt)
-        
-        if not paused:
-            if not game1.in_clear_anim:
-                fall_time1 += dt
-            if not game2.in_clear_anim:
-                fall_time2 += dt
+        # --- UPDATE LOGIC BASED ON STATE ---
+        if app_state == STATE_PLAYING:
+            # Update Game Logic (Animation) for both players
+            game1.clear_anim_duration = ANIM_SPEED
+            game1.update(dt)
+            game2.clear_anim_duration = ANIM_SPEED
+            game2.update(dt)
+            
+            # Check Game Over
+            if game1.game_over or game2.game_over:
+                app_state = STATE_GAMEOVER
+                if game1.game_over and game2.game_over:
+                    winner_text = "DRAW!"
+                elif game1.game_over:
+                    winner_text = "PLAYER 2 WINS!"
+                else:
+                    winner_text = "PLAYER 1 WINS!"
+
+            if not paused:
+                if not game1.in_clear_anim:
+                    fall_time1 += dt
+                if not game2.in_clear_anim:
+                    fall_time2 += dt
 
             # --- Attack Handling ---
             # P1 -> P2
@@ -1076,118 +1128,92 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
             
-            # Pass events to sliders if paused
-            if paused:
-                for slider in sliders:
-                    slider.handle_event(event)
-                # Apply values
-                DAS = das_slider.val
-                ARR = arr_slider.val
-                SDI = sdi_slider.val
-                ANIM_SPEED = anim_slider.val
+            if app_state == STATE_WAITING:
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                    app_state = STATE_PLAYING
+            
+            elif app_state == STATE_GAMEOVER:
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+                    # Reset Games
+                    game1 = TetrisGame()
+                    game2 = TetrisGame()
+                    controller1.game = game1
+                    controller2.game = game2
+                    particles = []
+                    effects = []
+                    fall_time1 = 0
+                    fall_time2 = 0
+                    app_state = STATE_WAITING # Go back to waiting or playing directly? Let's go WAITING
 
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    paused = not paused # Toggle pause
-                
-                # Only process game input if NOT paused
-                # Only process game input if NOT paused
-                if not paused:
-                    # Player 1 Controls (Arrow Keys, X, Z, Space, C)
-                    if not game1.game_over:
-                        if event.key == pygame.K_UP or event.key == pygame.K_x: 
-                            game1.step(ACTION_ROTATE_R)
-                        elif event.key == pygame.K_z: 
-                            game1.step(ACTION_ROTATE_L)
-                        elif event.key == pygame.K_SPACE: 
-                            game1.step(ACTION_DROP)
-                            fall_time1 = 0 
-                        elif event.key == pygame.K_LSHIFT:
-                            game1.step(ACTION_HOLD)
-                        elif event.key == pygame.K_r: 
-                            game1 = TetrisGame()
-                            fall_time1 = 0
-
-                        # DAS Setup for P1
-                        if event.key in key_states_p1:
-                            key_states_p1[event.key]['pressed'] = True
-                            key_states_p1[event.key]['das_timer'] = 0
-                            key_states_p1[event.key]['arr_timer'] = 0
-                            if event.key == pygame.K_LEFT: game1.step(ACTION_LEFT)
-                            elif event.key == pygame.K_RIGHT: game1.step(ACTION_RIGHT)
-                            elif event.key == pygame.K_DOWN: game1.step(ACTION_DOWN)
+            elif app_state == STATE_PLAYING:
+                # Update Sliders logic (Apply values)
+                if paused:
+                    # Apply values from sliders to game variables
+                    DAS = das_slider.val
+                    ARR = arr_slider.val
+                    SDI = sdi_slider.val
+                    ANIM_SPEED = anim_slider.val
+                    AI_SPEED = ai_slider.val
                     
-                    # Player 2 Controls (WASD, E, Q, F, Tab)
-                    if not game2.game_over:
-                        if event.key == pygame.K_w or event.key == pygame.K_e: 
-                            game2.step(ACTION_ROTATE_R)
-                        elif event.key == pygame.K_q: 
-                            game2.step(ACTION_ROTATE_L)
-                        elif event.key == pygame.K_f: 
-                            game2.step(ACTION_DROP)
-                            fall_time2 = 0 
-                        elif event.key == pygame.K_TAB:
-                            game2.step(ACTION_HOLD)
+                    # Update Controllers
+                    if isinstance(controller1, HumanController):
+                        controller1.update_settings(DAS, ARR, SDI)
+                    if isinstance(controller2, HumanController):
+                        controller2.update_settings(DAS, ARR, SDI)
+    
+                    # Update AI Speed
+                    if isinstance(controller2, AIController):
+                        controller2.update_speed(AI_SPEED)
+    
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        paused = not paused # Toggle pause
+                    
+                    # Only process game input if NOT paused
+                    if not paused:
+                        controller1.handle_event(event)
+                        controller2.handle_event(event)
 
-                        # DAS Setup for P2
-                        if event.key in key_states_p2:
-                            key_states_p2[event.key]['pressed'] = True
-                            key_states_p2[event.key]['das_timer'] = 0
-                            key_states_p2[event.key]['arr_timer'] = 0
-                            if event.key == pygame.K_a: game2.step(ACTION_LEFT)
-                            elif event.key == pygame.K_d: game2.step(ACTION_RIGHT)
-                            elif event.key == pygame.K_s: game2.step(ACTION_DOWN)
-            
-            elif event.type == pygame.KEYUP:
-                if event.key in key_states_p1:
-                    key_states_p1[event.key]['pressed'] = False
-                if event.key in key_states_p2:
-                    key_states_p2[event.key]['pressed'] = False
-            
-            elif event.type == pygame.MOUSEBUTTONUP:
-                if paused:
-                    for slider in sliders: slider.handle_event(event)
-            elif event.type == pygame.MOUSEMOTION:
-                if paused:
-                    for slider in sliders: slider.handle_event(event)
+                        # Manual Restart (Debug) - Optional, maybe remove to rely on Game Over logic
+                        if event.key == pygame.K_F5: # Changed from R to F5 to avoid conflict with Game Over R
+                             game1 = TetrisGame()
+                             game2 = TetrisGame() 
+                             controller1.game = game1
+                             controller2.game = game2
+                             fall_time1 = 0
+                             fall_time2 = 0
+
+                elif event.type == pygame.KEYUP:
+                    if not paused:
+                        controller1.handle_event(event)
+                        controller2.handle_event(event)
+                
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if paused:
+                        virtual_pos = convert_mouse_pos(event.pos)
+                        event.pos = virtual_pos
+                        for slider in sliders: slider.handle_event(event)
+
+                elif event.type == pygame.MOUSEBUTTONUP:
+                    if paused:
+                        # Convert mouse pos
+                        virtual_pos = convert_mouse_pos(event.pos)
+                        # Make a fake event or just pass pos
+                        # Slider expects event with .pos, so let's mock it or modify existing
+                        event.pos = virtual_pos
+                        for slider in sliders: slider.handle_event(event)
+
+                elif event.type == pygame.MOUSEMOTION:
+                    if paused:
+                        virtual_pos = convert_mouse_pos(event.pos)
+                        event.pos = virtual_pos
+                        for slider in sliders: slider.handle_event(event)
 
 
-        if not paused:
-            # --- Continuous Input (DAS / ARR / SDI) for Player 1 ---
-            if not game1.game_over:
-                for key in [pygame.K_LEFT, pygame.K_RIGHT, pygame.K_DOWN]:
-                    if key_states_p1[key]['pressed']:
-                        # Determine repeat rate
-                        base_arr = SDI if key == pygame.K_DOWN else ARR
-                        safe_arr = max(1, base_arr)
-
-                        key_states_p1[key]['das_timer'] += dt
-                        if key_states_p1[key]['das_timer'] >= DAS:
-                            key_states_p1[key]['arr_timer'] += dt
-                            if key_states_p1[key]['arr_timer'] >= safe_arr:
-                                while key_states_p1[key]['arr_timer'] >= safe_arr:
-                                    key_states_p1[key]['arr_timer'] -= safe_arr
-                                    if key == pygame.K_LEFT: game1.step(ACTION_LEFT)
-                                    elif key == pygame.K_RIGHT: game1.step(ACTION_RIGHT)
-                                    elif key == pygame.K_DOWN: game1.step(ACTION_DOWN)
-            
-            # --- Continuous Input (DAS / ARR / SDI) for Player 2 ---
-            if not game2.game_over:
-                for key in [pygame.K_a, pygame.K_d, pygame.K_s]:
-                    if key_states_p2[key]['pressed']:
-                        # Determine repeat rate
-                        base_arr = SDI if key == pygame.K_s else ARR
-                        safe_arr = max(1, base_arr)
-
-                        key_states_p2[key]['das_timer'] += dt
-                        if key_states_p2[key]['das_timer'] >= DAS:
-                            key_states_p2[key]['arr_timer'] += dt
-                            if key_states_p2[key]['arr_timer'] >= safe_arr:
-                                while key_states_p2[key]['arr_timer'] >= safe_arr:
-                                    key_states_p2[key]['arr_timer'] -= safe_arr
-                                    if key == pygame.K_a: game2.step(ACTION_LEFT)
-                                    elif key == pygame.K_d: game2.step(ACTION_RIGHT)
-                                    elif key == pygame.K_s: game2.step(ACTION_DOWN)
+        if app_state == STATE_PLAYING and not paused:
+            # --- Continuous Input (DAS / ARR / SDI) / AI Update ---
+            controller1.update(dt)
+            controller2.update(dt)
 
             # Gravity for Player 1
             if not game1.game_over:
@@ -1212,33 +1238,66 @@ def main():
         draw_grid(virtual_screen, game1, DAS, ARR, offset_x=0)      # Player 1 (Left)
         draw_grid(virtual_screen, game2, DAS, ARR, offset_x=600)    # Player 2 (Right)
         
-        # Update and Draw Particles
-        for p in particles[:]: # Iterate copy to allow removal
-            p.update(dt)
-            p.draw(virtual_screen)
-            if p.arrived:
-                # Add garbage to target
-                if p.target_x < 600: # Target is P1 (Left)
-                    game1.garbage_queue += p.value
-                else: # Target is P2 (Right)
-                    game2.garbage_queue += p.value
-                particles.remove(p)
-                
-                # Spawn Impact Effects (Impact Explosion)
-                # p.target_x, p.target_y is where it hit
-                for _ in range(20):
-                     ex = EffectParticle(p.target_x, p.target_y, (255, 100, 100), random.randint(100, 400), random.uniform(0.3, 0.8), random.randint(3, 10))
-                     effects.append(ex)
+        if app_state == STATE_PLAYING:
+            # Update and Draw Particles
+            for p in particles[:]: # Iterate copy to allow removal
+                p.update(dt)
+                p.draw(virtual_screen)
+                if p.arrived:
+                    # Add garbage to target
+                    if p.target_x < 600: # Target is P1 (Left)
+                        game1.garbage_queue += p.value
+                    else: # Target is P2 (Right)
+                        game2.garbage_queue += p.value
+                    particles.remove(p)
+                    
+                    # Spawn Impact Effects (Impact Explosion)
+                    # p.target_x, p.target_y is where it hit
+                    for _ in range(20):
+                         ex = EffectParticle(p.target_x, p.target_y, (255, 100, 100), random.randint(100, 400), random.uniform(0.3, 0.8), random.randint(3, 10))
+                         effects.append(ex)
+            
+            # Update and Draw Effects
+            for e in effects[:]:
+                e.update(dt)
+                e.draw(virtual_screen)
+                if not e.alive:
+                    effects.remove(e)
         
-        # Update and Draw Effects
-        for e in effects[:]:
-            e.update(dt)
-            e.draw(virtual_screen)
-            if not e.alive:
-                effects.remove(e)
-        
-        if paused:
+        if paused and app_state == STATE_PLAYING:
+            # We need to capture mouse down in main loop too for sliders to work properly with dragging
+            # But handle_event handles DOWN/UP/MOTION based on event type.
+            # We already passed converted events in the event loop.
+            
             draw_pause_menu(virtual_screen, sliders)
+
+        # Draw UI Overlays for States
+        font_large = pygame.font.SysFont('Arial', 48, bold=True)
+        font_small = pygame.font.SysFont('Arial', 24)
+
+        if app_state == STATE_WAITING:
+            # Overlay
+            overlay = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            virtual_screen.blit(overlay, (0, 0))
+            
+            text = font_large.render("PRESS SPACE TO START", True, (255, 255, 255))
+            virtual_screen.blit(text, (VIRTUAL_W//2 - text.get_width()//2, VIRTUAL_H//2))
+            
+        elif app_state == STATE_GAMEOVER:
+            # Overlay
+            overlay = pygame.Surface((VIRTUAL_W, VIRTUAL_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            virtual_screen.blit(overlay, (0, 0))
+            
+            text = font_large.render("GAME OVER", True, (255, 50, 50))
+            virtual_screen.blit(text, (VIRTUAL_W//2 - text.get_width()//2, VIRTUAL_H//2 - 50))
+            
+            win_surf = font_large.render(winner_text, True, (255, 255, 100))
+            virtual_screen.blit(win_surf, (VIRTUAL_W//2 - win_surf.get_width()//2, VIRTUAL_H//2 + 20))
+            
+            reset_surf = font_small.render("Press R to Restart", True, (200, 200, 200))
+            virtual_screen.blit(reset_surf, (VIRTUAL_W//2 - reset_surf.get_width()//2, VIRTUAL_H//2 + 100))
 
         # Scale and Draw to Physical Screen
         # Maintain Aspect Ratio
