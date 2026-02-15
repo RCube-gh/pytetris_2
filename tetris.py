@@ -10,8 +10,8 @@ GRID_WIDTH = 10
 GRID_HEIGHT = 20 # Visible height. Usually there is buffer.
 BUFFER_HEIGHT = 20 # Extra height for spawning
 TOTAL_HEIGHT = GRID_HEIGHT + BUFFER_HEIGHT
-SCREEN_WIDTH = 500
-SCREEN_HEIGHT = 650
+SCREEN_WIDTH = 1200  # Dual player layout (600 x 2)
+SCREEN_HEIGHT = 850
 FPS = 60
 
 # Actions
@@ -390,21 +390,21 @@ def draw_piece_preview(screen, piece_type, x, y, size=20):
         inner_rect = pygame.Rect(px+2, py+2, size-4, size-4)
         pygame.draw.rect(screen, color, inner_rect)
 
-def draw_grid(screen, game, das_val, arr_val):
+def draw_grid(screen, game, das_val, arr_val, offset_x=0):
     # Layout Config - Puyo Tetris Style
     # Center the board, but ensure enough space for HOLD (Left)
-    total_w = SCREEN_WIDTH
-    board_w = GRID_WIDTH * BLOCK_SIZE
+    player_area_w = SCREEN_WIDTH // 2  # 500px per player
+    board_w = GRID_WIDTH * BLOCK_SIZE  # 300px
     
-    # Shift board slightly right to make room for HOLD
-    board_x = (total_w - board_w) // 2 + 40 
+    # Center board within player area
+    board_x = offset_x + (player_area_w - board_w) // 2
     board_y = 50
     
-    # Left Side: HOLD
-    hold_x = board_x - 120
+    # Left Side: HOLD (closer to board)
+    hold_x = board_x - 90
     
     # Right Side: NEXT
-    next_x = board_x + board_w + 20
+    next_x = board_x + board_w + 10
     
     # Draw Board Background/Border
     pygame.draw.rect(screen, (0, 0, 0), (board_x, board_y, board_w, GRID_HEIGHT * BLOCK_SIZE))
@@ -704,19 +704,30 @@ def draw_pause_menu(screen, sliders):
 
 def main():
     pygame.init()
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Moca-Tris AI Environment")
+    
+    # Virtual Resolution (Internal)
+    VIRTUAL_W, VIRTUAL_H = SCREEN_WIDTH, SCREEN_HEIGHT
+    
+    # Physical Window (Resizable)
+    screen = pygame.display.set_mode((VIRTUAL_W, VIRTUAL_H), pygame.RESIZABLE)
+    virtual_screen = pygame.Surface((VIRTUAL_W, VIRTUAL_H))
+    
+    pygame.display.set_caption("Moca-Tris AI Environment - Dual Player")
     clock = pygame.time.Clock()
-    game = TetrisGame()
+    
+    # Dual Player Setup
+    game1 = TetrisGame()  # Player 1 (Left)
+    game2 = TetrisGame()  # Player 2 (Right)
 
     running = True
     paused = False # New state
-    fall_time = 0
+    fall_time1 = 0
+    fall_time2 = 0
     fall_speed = 800 
 
     # Input Constants (Modern Tetris Standard-ish)
-    DAS = 150 
-    ARR = 50 
+    DAS = 100 
+    ARR = 60 
     SDI = 50 
     ANIM_SPEED = 500 # Line Clear Animation Duration (ms)
     
@@ -727,22 +738,34 @@ def main():
     anim_slider = Slider(100, 460, 300, 10, 0, 1000, ANIM_SPEED, "Anim Speed (0=OFF)")
     sliders = [das_slider, arr_slider, sdi_slider, anim_slider]
 
-    # Input State Management
-    key_states = {
+    # Input State Management - Player 1 (Arrow Keys)
+    key_states_p1 = {
         pygame.K_LEFT:  {'pressed': False, 'das_timer': 0, 'arr_timer': 0},
         pygame.K_RIGHT: {'pressed': False, 'das_timer': 0, 'arr_timer': 0},
         pygame.K_DOWN:  {'pressed': False, 'das_timer': 0, 'arr_timer': 0}
+    }
+    
+    # Input State Management - Player 2 (WASD)
+    key_states_p2 = {
+        pygame.K_a:  {'pressed': False, 'das_timer': 0, 'arr_timer': 0},
+        pygame.K_d: {'pressed': False, 'das_timer': 0, 'arr_timer': 0},
+        pygame.K_s:  {'pressed': False, 'das_timer': 0, 'arr_timer': 0}
     }
 
     while running:
         dt = clock.tick(FPS)
         
-        # Update Game Logic (Animation)
-        game.clear_anim_duration = ANIM_SPEED
-        game.update(dt)
+        # Update Game Logic (Animation) for both players
+        game1.clear_anim_duration = ANIM_SPEED
+        game1.update(dt)
+        game2.clear_anim_duration = ANIM_SPEED
+        game2.update(dt)
         
-        if not paused and not game.in_clear_anim:
-            fall_time += dt
+        if not paused:
+            if not game1.in_clear_anim:
+                fall_time1 += dt
+            if not game2.in_clear_anim:
+                fall_time2 += dt
 
         # Input Handling
         for event in pygame.event.get():
@@ -764,32 +787,58 @@ def main():
                     paused = not paused # Toggle pause
                 
                 # Only process game input if NOT paused
-                if not paused and not game.game_over:
-                    # Instant Actions
-                    if event.key == pygame.K_UP: 
-                        game.step(ACTION_ROTATE_R)
-                    elif event.key == pygame.K_z: 
-                        game.step(ACTION_ROTATE_L)
-                    elif event.key == pygame.K_SPACE: 
-                        game.step(ACTION_DROP)
-                        fall_time = 0 
-                    elif event.key in [pygame.K_LSHIFT, pygame.K_RSHIFT, pygame.K_c]:
-                        game.step(ACTION_HOLD)
-                    elif event.key == pygame.K_r: 
-                        game = TetrisGame()
+                # Only process game input if NOT paused
+                if not paused:
+                    # Player 1 Controls (Arrow Keys, X, Z, Space, C)
+                    if not game1.game_over:
+                        if event.key == pygame.K_UP or event.key == pygame.K_x: 
+                            game1.step(ACTION_ROTATE_R)
+                        elif event.key == pygame.K_z: 
+                            game1.step(ACTION_ROTATE_L)
+                        elif event.key == pygame.K_SPACE: 
+                            game1.step(ACTION_DROP)
+                            fall_time1 = 0 
+                        elif event.key == pygame.K_LSHIFT:
+                            game1.step(ACTION_HOLD)
+                        elif event.key == pygame.K_r: 
+                            game1 = TetrisGame()
+                            fall_time1 = 0
 
-                    # DAS Setup
-                    if event.key in key_states:
-                        key_states[event.key]['pressed'] = True
-                        key_states[event.key]['das_timer'] = 0
-                        key_states[event.key]['arr_timer'] = 0
-                        if event.key == pygame.K_LEFT: game.step(ACTION_LEFT)
-                        elif event.key == pygame.K_RIGHT: game.step(ACTION_RIGHT)
-                        elif event.key == pygame.K_DOWN: game.step(ACTION_DOWN)
+                        # DAS Setup for P1
+                        if event.key in key_states_p1:
+                            key_states_p1[event.key]['pressed'] = True
+                            key_states_p1[event.key]['das_timer'] = 0
+                            key_states_p1[event.key]['arr_timer'] = 0
+                            if event.key == pygame.K_LEFT: game1.step(ACTION_LEFT)
+                            elif event.key == pygame.K_RIGHT: game1.step(ACTION_RIGHT)
+                            elif event.key == pygame.K_DOWN: game1.step(ACTION_DOWN)
+                    
+                    # Player 2 Controls (WASD, E, Q, F, Tab)
+                    if not game2.game_over:
+                        if event.key == pygame.K_w or event.key == pygame.K_e: 
+                            game2.step(ACTION_ROTATE_R)
+                        elif event.key == pygame.K_q: 
+                            game2.step(ACTION_ROTATE_L)
+                        elif event.key == pygame.K_f: 
+                            game2.step(ACTION_DROP)
+                            fall_time2 = 0 
+                        elif event.key == pygame.K_TAB:
+                            game2.step(ACTION_HOLD)
+
+                        # DAS Setup for P2
+                        if event.key in key_states_p2:
+                            key_states_p2[event.key]['pressed'] = True
+                            key_states_p2[event.key]['das_timer'] = 0
+                            key_states_p2[event.key]['arr_timer'] = 0
+                            if event.key == pygame.K_a: game2.step(ACTION_LEFT)
+                            elif event.key == pygame.K_d: game2.step(ACTION_RIGHT)
+                            elif event.key == pygame.K_s: game2.step(ACTION_DOWN)
             
             elif event.type == pygame.KEYUP:
-                if event.key in key_states:
-                    key_states[event.key]['pressed'] = False
+                if event.key in key_states_p1:
+                    key_states_p1[event.key]['pressed'] = False
+                if event.key in key_states_p2:
+                    key_states_p2[event.key]['pressed'] = False
             
             elif event.type == pygame.MOUSEBUTTONUP:
                 if paused:
@@ -800,40 +849,87 @@ def main():
 
 
         if not paused:
-            # --- Continuous Input (DAS / ARR / SDI) ---
-            if not game.game_over:
+            # --- Continuous Input (DAS / ARR / SDI) for Player 1 ---
+            if not game1.game_over:
                 for key in [pygame.K_LEFT, pygame.K_RIGHT, pygame.K_DOWN]:
-                    if key_states[key]['pressed']:
+                    if key_states_p1[key]['pressed']:
                         # Determine repeat rate
                         base_arr = SDI if key == pygame.K_DOWN else ARR
-                        safe_arr = max(1, base_arr) # Ensure no 0 division or infinite loop
+                        safe_arr = max(1, base_arr)
 
-                        key_states[key]['das_timer'] += dt
-                        if key_states[key]['das_timer'] >= DAS:
-                            key_states[key]['arr_timer'] += dt
-                            if key_states[key]['arr_timer'] >= safe_arr:
-                                while key_states[key]['arr_timer'] >= safe_arr:
-                                    key_states[key]['arr_timer'] -= safe_arr
-                                    if key == pygame.K_LEFT: game.step(ACTION_LEFT)
-                                    elif key == pygame.K_RIGHT: game.step(ACTION_RIGHT)
-                                    elif key == pygame.K_DOWN: game.step(ACTION_DOWN)
+                        key_states_p1[key]['das_timer'] += dt
+                        if key_states_p1[key]['das_timer'] >= DAS:
+                            key_states_p1[key]['arr_timer'] += dt
+                            if key_states_p1[key]['arr_timer'] >= safe_arr:
+                                while key_states_p1[key]['arr_timer'] >= safe_arr:
+                                    key_states_p1[key]['arr_timer'] -= safe_arr
+                                    if key == pygame.K_LEFT: game1.step(ACTION_LEFT)
+                                    elif key == pygame.K_RIGHT: game1.step(ACTION_RIGHT)
+                                    elif key == pygame.K_DOWN: game1.step(ACTION_DOWN)
+            
+            # --- Continuous Input (DAS / ARR / SDI) for Player 2 ---
+            if not game2.game_over:
+                for key in [pygame.K_a, pygame.K_d, pygame.K_s]:
+                    if key_states_p2[key]['pressed']:
+                        # Determine repeat rate
+                        base_arr = SDI if key == pygame.K_s else ARR
+                        safe_arr = max(1, base_arr)
 
-            # Gravity
-            if not game.game_over:
-                if fall_time >= fall_speed:
-                    if not game._check_collision(game.piece_x, game.piece_y + 1, game.piece_rot, game.piece_type):
-                        game.piece_y += 1
+                        key_states_p2[key]['das_timer'] += dt
+                        if key_states_p2[key]['das_timer'] >= DAS:
+                            key_states_p2[key]['arr_timer'] += dt
+                            if key_states_p2[key]['arr_timer'] >= safe_arr:
+                                while key_states_p2[key]['arr_timer'] >= safe_arr:
+                                    key_states_p2[key]['arr_timer'] -= safe_arr
+                                    if key == pygame.K_a: game2.step(ACTION_LEFT)
+                                    elif key == pygame.K_d: game2.step(ACTION_RIGHT)
+                                    elif key == pygame.K_s: game2.step(ACTION_DOWN)
+
+            # Gravity for Player 1
+            if not game1.game_over:
+                if fall_time1 >= fall_speed:
+                    if not game1._check_collision(game1.piece_x, game1.piece_y + 1, game1.piece_rot, game1.piece_type):
+                        game1.piece_y += 1
                     else:
-                         game._lock_piece()
-                    fall_time = 0
+                         game1._lock_piece()
+                    fall_time1 = 0
+            
+            # Gravity for Player 2
+            if not game2.game_over:
+                if fall_time2 >= fall_speed:
+                    if not game2._check_collision(game2.piece_x, game2.piece_y + 1, game2.piece_rot, game2.piece_type):
+                        game2.piece_y += 1
+                    else:
+                         game2._lock_piece()
+                    fall_time2 = 0
 
-        # Rendering
-        screen.fill((30, 30, 40)) 
-        draw_grid(screen, game, DAS, ARR)
+        # Rendering to Virtual Screen
+        virtual_screen.fill((30, 30, 40)) 
+        draw_grid(virtual_screen, game1, DAS, ARR, offset_x=0)      # Player 1 (Left)
+        draw_grid(virtual_screen, game2, DAS, ARR, offset_x=600)    # Player 2 (Right)
         
         if paused:
-            draw_pause_menu(screen, sliders)
+            draw_pause_menu(virtual_screen, sliders)
 
+        # Scale and Draw to Physical Screen
+        # Maintain Aspect Ratio
+        current_w, current_h = screen.get_size()
+        scale_w = current_w / VIRTUAL_W
+        scale_h = current_h / VIRTUAL_H
+        scale = min(scale_w, scale_h)
+        
+        new_w = int(VIRTUAL_W * scale)
+        new_h = int(VIRTUAL_H * scale)
+        
+        scaled_surf = pygame.transform.scale(virtual_screen, (new_w, new_h))
+        
+        # Center the scaled surface
+        pad_x = (current_w - new_w) // 2
+        pad_y = (current_h - new_h) // 2
+        
+        screen.fill((0, 0, 0)) # Fill black bars
+        screen.blit(scaled_surf, (pad_x, pad_y))
+        
         pygame.display.flip()
 
     pygame.quit()
