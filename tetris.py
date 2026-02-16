@@ -605,7 +605,7 @@ def draw_grid(screen, game, das_val, arr_val, offset_x=0):
     board_y = 50
     
     # Left Side: HOLD (closer to board)
-    hold_x = board_x - 90
+    hold_x = board_x - 120 # Adjusted to prevent overlap with board
     
     # Right Side: NEXT
     next_x = board_x + board_w + 10
