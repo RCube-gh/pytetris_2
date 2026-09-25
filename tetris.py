@@ -594,7 +594,7 @@ def draw_piece_preview(screen, piece_type, x, y, size=20):
         inner_rect = pygame.Rect(px+2, py+2, size-4, size-4)
         pygame.draw.rect(screen, color, inner_rect)
 
-def draw_grid(screen, game, das_val, arr_val, offset_x=0):
+def draw_grid(screen, game, das_val, arr_val, offset_x=0, controller=None):
     # Layout Config - Puyo Tetris Style
     # Center the board, but ensure enough space for HOLD (Left)
     player_area_w = SCREEN_WIDTH // 2  # 500px per player
@@ -712,6 +712,25 @@ def draw_grid(screen, game, das_val, arr_val, offset_x=0):
             vis_y = by - BUFFER_HEIGHT
             if vis_y >= 0:
                  draw_block(screen, board_x + bx * BLOCK_SIZE, board_y + vis_y * BLOCK_SIZE, COLORS[game.piece_type])
+
+        # Draw AI Target (Visualization)
+        if controller and isinstance(controller, AIController) and controller.current_target:
+            tx, ty, trot = controller.current_target
+            # Calculate blocks for target
+            target_blocks = game._get_blocks(tx, ty, trot, game.piece_type)
+            
+            # Draw as wireframe (distinct from Ghost)
+            for bx, by in target_blocks:
+                vis_y = by - BUFFER_HEIGHT
+                if vis_y >= 0:
+                    rect = pygame.Rect(board_x + bx * BLOCK_SIZE, board_y + vis_y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE)
+                    # Color based on piece type but wireframe
+                    color = COLORS[game.piece_type]
+                    # Draw thick outline
+                    pygame.draw.rect(screen, color, rect, 3) 
+                    # Cross in center?
+                    # pygame.draw.line(screen, color, rect.topleft, rect.bottomright, 1)
+                    # pygame.draw.line(screen, color, rect.bottomleft, rect.topright, 1)
 
     # Text Effect: "TETRIS"
     if game.in_clear_anim and len(game.clearing_lines) >= 4:
@@ -1235,8 +1254,8 @@ def main():
 
         # Rendering to Virtual Screen
         virtual_screen.fill((30, 30, 40)) 
-        draw_grid(virtual_screen, game1, DAS, ARR, offset_x=0)      # Player 1 (Left)
-        draw_grid(virtual_screen, game2, DAS, ARR, offset_x=600)    # Player 2 (Right)
+        draw_grid(virtual_screen, game1, DAS, ARR, offset_x=0, controller=controller1)      # Player 1 (Left)
+        draw_grid(virtual_screen, game2, DAS, ARR, offset_x=600, controller=controller2)    # Player 2 (Right)
         
         if app_state == STATE_PLAYING:
             # Update and Draw Particles

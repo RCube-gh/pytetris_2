@@ -118,9 +118,10 @@ while not game.game_over:
 
 ### Available Actions
 ```python
-ACTION_LEFT = 0      # Move left
-ACTION_RIGHT = 1     # Move right
-ACTION_DOWN = 2      # Soft drop
+ACTION_NONE = 0      # No operation
+ACTION_LEFT = 1      # Move left
+ACTION_RIGHT = 2     # Move right
+ACTION_DOWN = 3      # Soft drop
 ACTION_DROP = 4      # Hard drop
 ACTION_ROTATE_R = 5  # Rotate clockwise
 ACTION_ROTATE_L = 6  # Rotate counter-clockwise

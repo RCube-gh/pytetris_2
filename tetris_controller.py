@@ -149,6 +149,7 @@ class AIController(TetrisController):
         self.timer = 0
         self.action_delay = 50 # Make it faster! (Original 150)
         self.bot = SmartBot() # Use SmartBot!
+        self.current_target = None # (x, y, rot) for visualizationer!
 
     def update_speed(self, delay_ms):
         """Update the delay between AI actions."""
@@ -158,15 +159,31 @@ class AIController(TetrisController):
         if self.game.game_over:
             return
 
+        # A line-clear animation is followed by a changed board.  Any plan made
+        # before or during that animation is therefore stale, so wait for the
+        # game to finish clearing and request a fresh plan on the new board.
+        if self.game.in_clear_anim:
+            self.move_queue.clear()
+            self.current_target = None
+            self.timer = 0
+            return
+
         self.timer += dt
         if self.timer >= self.action_delay:
             self.timer = 0
             
             # If no moves left, ask the bot for a plan!
             if not self.move_queue:
-                self.move_queue = self.bot.get_moves(self.game)
-
+                moves, target = self.bot.get_moves(self.game)
+                self.move_queue = moves
+                self.current_target = target
+            
             # Execute next move
             if self.move_queue:
                 action = self.move_queue.pop(0)
                 self.game.step(action)
+                
+                # If finished, clear target? 
+                # Or keep it until next plan? Usually keep until next.
+                if not self.move_queue:
+                    self.current_target = None
